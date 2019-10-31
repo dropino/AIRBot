@@ -1,5 +1,6 @@
 # AIRBot
-A starcraft 2 AI written in Python
+A starcraft 2 AI written in Python, using the python-sc2 library.
 
-Currently plays only zerg, using a number of aggressive strategies.
-In the next iteration it will be expanded to play all three races and have different builds for every matchup.
+Runs on version 4.9.4 of starcraft 2 as subsequent patches broke the library.
+
+Currently plays zerg, using a number of different aggressive strategies.
