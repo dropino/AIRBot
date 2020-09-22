@@ -18,6 +18,7 @@ class AIRBot(sc2.BotAI):
         self.build = 3
         """random.randint(1,4)"""
 
+
     async def on_step(self, iteration):
         if iteration == 0:
             await self.chat_send("(glhf)")
@@ -250,7 +251,6 @@ class AIRBot(sc2.BotAI):
                     r = await self.do(hatchery.train(QUEEN))
                     if not r:
                         self.queeen_started = True
-
 
 
 def main():
