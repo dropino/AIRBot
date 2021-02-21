@@ -1,264 +1,79 @@
- import random
+import sys, os
+
+sys.path.append(os.path.join(os.path.dirname(__file__), "../.."))
+
+import random
 
 import sc2
 from sc2 import Race, Difficulty
-from sc2.constants import *
+from sc2.ids.unit_typeid import UnitTypeId
+from sc2.ids.ability_id import AbilityId
+from sc2.ids.upgrade_id import UpgradeId
+from sc2.ids.buff_id import BuffId
+from sc2.unit import Unit
+from sc2.units import Units
+from sc2.position import Point2
 from sc2.player import Bot, Computer
 
-class AIRBot(sc2.BotAI):
-    def __init__(self):
-        self.drone_counter = 0
-        self.extractor_started = False
-        self.spawning_pool_started = False
-        self.moved_workers_to_gas = False
-        self.moved_workers_from_gas = False
-        self.queeen_started = False
-        self.mboost_started = False
-        self.overlord_started = False
-        self.build = 3
-        """random.randint(1,4)"""
 
-
+class CannonRushBot(sc2.BotAI):
     async def on_step(self, iteration):
         if iteration == 0:
-            await self.chat_send("(glhf)")
-            """await self.chat_send(self.build)"""
+            await self.chat_send("(probe)(pylon)(cannon)(cannon)(gg)")
 
-        """gas e flood di ling"""
-        if self.build == 1:
-            if not self.units(HATCHERY).ready.exists:
-                for unit in self.workers | self.units(ZERGLING) | self.units(QUEEN):
-                    await self.do(unit.attack(self.enemy_start_locations[0]))
-                return
+        if not self.townhalls:
+            # Attack with all workers if we don't have any nexuses left, attack-move on enemy spawn (doesn't work on 4 player map) so that probes auto attack on the way
+            for worker in self.workers:
+                worker.attack(self.enemy_start_locations[0])
+            return
+        else:
+            nexus = self.townhalls.random
 
-            hatchery = self.units(HATCHERY).ready.first
-            larvae = self.units(LARVA)
+        # Make probes until we have 16 total
+        if self.supply_workers < 16 and nexus.is_idle:
+            if self.can_afford(UnitTypeId.PROBE):
+                nexus.train(UnitTypeId.PROBE)
 
-            target = self.known_enemy_structures.random_or(self.enemy_start_locations[0]).position
-            for zl in self.units(ZERGLING).idle:
-                await self.do(zl.attack(target))
+        # If we have no pylon, build one near starting nexus
+        elif not self.structures(UnitTypeId.PYLON) and self.already_pending(UnitTypeId.PYLON) == 0:
+            if self.can_afford(UnitTypeId.PYLON):
+                await self.build(UnitTypeId.PYLON, near=nexus)
 
-            for queen in self.units(QUEEN).idle:
-                abilities = await self.get_available_abilities(queen)
-                if AbilityId.EFFECT_INJECTLARVA in abilities:
-                    await self.do(queen(EFFECT_INJECTLARVA, hatchery))
+        # If we have no forge, build one near the pylon that is closest to our starting nexus
+        elif not self.structures(UnitTypeId.FORGE):
+            pylon_ready = self.structures(UnitTypeId.PYLON).ready
+            if pylon_ready:
+                if self.can_afford(UnitTypeId.FORGE):
+                    await self.build(UnitTypeId.FORGE, near=pylon_ready.closest_to(nexus))
 
-            if self.vespene >= 100:
-                sp = self.units(SPAWNINGPOOL).ready
-                if sp.exists and self.minerals >= 100 and not self.mboost_started:
-                    await self.do(sp.first(RESEARCH_ZERGLINGMETABOLICBOOST))
-                    self.mboost_started = True
+        # If we have less than 2 pylons, build one at the enemy base
+        elif self.structures(UnitTypeId.PYLON).amount < 2:
+            if self.can_afford(UnitTypeId.PYLON):
+                pos = self.enemy_start_locations[0].towards(self.game_info.map_center, random.randrange(8, 15))
+                await self.build(UnitTypeId.PYLON, near=pos)
 
-                if not self.moved_workers_from_gas:
-                    self.moved_workers_from_gas = True
-                    for drone in self.workers:
-                        m = self.state.mineral_field.closer_than(10, drone.position)
-                        await self.do(drone.gather(m.random, queue=True))
+        # If we have no cannons but at least 2 completed pylons, automatically find a placement location and build them near enemy start location
+        elif not self.structures(UnitTypeId.PHOTONCANNON):
+            if self.structures(UnitTypeId.PYLON).ready.amount >= 2 and self.can_afford(UnitTypeId.PHOTONCANNON):
+                pylon = self.structures(UnitTypeId.PYLON).closer_than(20, self.enemy_start_locations[0]).random
+                await self.build(UnitTypeId.PHOTONCANNON, near=pylon)
 
-            if self.supply_left <= 2:
-                if self.can_afford(OVERLORD) and larvae.exists and not self.overlord_started:
-                    await self.do(larvae.random.train(OVERLORD))
-                    self.overlord_started = True
-            else:
-                self.overlord_started = False
-
-            if self.units(SPAWNINGPOOL).ready.exists:
-                if larvae.exists and self.can_afford(ZERGLING):
-                    await self.do(larvae.random.train(ZERGLING))
-
-            if self.units(EXTRACTOR).ready.exists and not self.moved_workers_to_gas:
-                self.moved_workers_to_gas = True
-                extractor = self.units(EXTRACTOR).first
-                for drone in self.workers.random_group_of(3):
-                    await self.do(drone.gather(extractor))
-
-            if self.minerals > 500 and self.workers.exists:
-                for d in range(4, 15):
-                    pos = hatchery.position.to2.towards(self.game_info.map_center, d)
-                    if await self.can_place(HATCHERY, pos):
-                        self.spawning_pool_started = True
-                        await self.do(self.workers.random.build(HATCHERY, pos))
-                        break
-
-            if self.drone_counter < 3:
-                if self.can_afford(DRONE):
-                    self.drone_counter += 1
-                    await self.do(larvae.random.train(DRONE))
-
-            if not self.extractor_started:
-                if self.can_afford(EXTRACTOR) and self.workers.exists:
-                    drone = self.workers.random
-                    target = self.state.vespene_geyser.closest_to(drone.position)
-                    err = await self.do(drone.build(EXTRACTOR, target))
-                    if not err:
-                        self.extractor_started = True
-
-            elif not self.spawning_pool_started:
-                if self.can_afford(SPAWNINGPOOL) and self.workers.exists:
-                    for d in range(4, 15):
-                        pos = hatchery.position.to2.towards(self.game_info.map_center, d)
-                        if await self.can_place(SPAWNINGPOOL, pos):
-                            drone = self.workers.closest_to(pos)
-                            err = await self.do(drone.build(SPAWNINGPOOL, pos))
-                            if not err:
-                                self.spawning_pool_started = True
-                                break
-
-            elif not self.queeen_started and self.units(SPAWNINGPOOL).ready.exists:
-                if self.can_afford(QUEEN):
-                    r = await self.do(hatchery.train(QUEEN))
-                    if not r:
-                        self.queeen_started = True
-
-        """2- 12 pool"""
-        if self.build == 2:
-            if not self.units(HATCHERY).ready.exists:
-                for unit in self.workers | self.units(ZERGLING) | self.units(QUEEN):
-                    await self.do(unit.attack(self.enemy_start_locations[0]))
-                return
-
-            hatchery = self.units(HATCHERY).ready.first
-            larvae = self.units(LARVA)
-
-            target = self.known_enemy_structures.random_or(self.enemy_start_locations[0]).position
-            for zl in self.units(ZERGLING).idle:
-                await self.do(zl.attack(target))
-
-            for queen in self.units(QUEEN).idle:
-                abilities = await self.get_available_abilities(queen)
-                if AbilityId.EFFECT_INJECTLARVA in abilities:
-                    await self.do(queen(EFFECT_INJECTLARVA, hatchery))
-
-            if self.supply_left <= 2:
-                if self.can_afford(OVERLORD) and larvae.exists and not self.overlord_started:
-                    await self.do(larvae.random.train(OVERLORD))
-                    self.overlord_started = True
-            else:
-                self.overlord_started = False
-
-            if self.units(SPAWNINGPOOL).ready.exists:
-                if larvae.exists and self.can_afford(ZERGLING):
-                    await self.do(larvae.random.train(ZERGLING))
-
-            if self.minerals > 400 and self.workers.exists:
-                for d in range(4, 15):
-                    pos = hatchery.position.to2.towards(self.game_info.map_center, d)
-                    if await self.can_place(HATCHERY, pos):
-                        self.spawning_pool_started = True
-                        await self.do(self.workers.random.build(HATCHERY, pos))
-                        break
-
-            elif not self.spawning_pool_started:
-                if self.can_afford(SPAWNINGPOOL) and self.workers.exists:
-                    for d in range(4, 15):
-                        pos = hatchery.position.to2.towards(self.game_info.map_center, d)
-                        if await self.can_place(SPAWNINGPOOL, pos):
-                            drone = self.workers.closest_to(pos)
-                            err = await self.do(drone.build(SPAWNINGPOOL, pos))
-                            if not err:
-                                self.spawning_pool_started = True
-                                break
-
-            elif not self.queeen_started and self.units(SPAWNINGPOOL).ready.exists:
-                if self.can_afford(QUEEN):
-                    r = await self.do(hatchery.train(QUEEN))
-                    if not r:
-                        self.queeen_started = True
-
-        """3-ammassa ling e pusha con 25 ling"""
-        if self.build == 3:
-            if not self.units(HATCHERY).ready.exists:
-                for unit in self.workers | self.units(ZERGLING) | self.units(QUEEN):
-                    await self.do(unit.attack(self.enemy_start_locations[0]))
-                return
-
-            hatchery = self.units(HATCHERY).ready.first
-            larvae = self.units(LARVA)
-
-            target = self.known_enemy_structures.random_or(self.enemy_start_locations[0]).position
-            if self.units(ZERGLING).amount >= 25:
-                for zl in self.units(ZERGLING).idle:
-                    await self.do(zl.attack(target))
-
-            for queen in self.units(QUEEN).idle:
-                abilities = await self.get_available_abilities(queen)
-                if AbilityId.EFFECT_INJECTLARVA in abilities:
-                    await self.do(queen(EFFECT_INJECTLARVA, hatchery))
-
-            if self.vespene >= 100:
-                sp = self.units(SPAWNINGPOOL).ready
-                if sp.exists and self.minerals >= 100 and not self.mboost_started:
-                    await self.do(sp.first(RESEARCH_ZERGLINGMETABOLICBOOST))
-                    self.mboost_started = True
-
-                if not self.moved_workers_from_gas:
-                    self.moved_workers_from_gas = True
-                    for drone in self.workers:
-                        m = self.state.mineral_field.closer_than(10, drone.position)
-                        await self.do(drone.gather(m.random, queue=True))
-
-            if self.supply_left <= 2:
-                if self.can_afford(OVERLORD) and larvae.exists and not self.overlord_started:
-                    await self.do(larvae.random.train(OVERLORD))
-                    self.overlord_started = True
-            else:
-                self.overlord_started = False
-
-            if self.units(SPAWNINGPOOL).ready.exists:
-                if larvae.exists and self.can_afford(ZERGLING):
-                    await self.do(larvae.random.train(ZERGLING))
-
-            if self.units(EXTRACTOR).ready.exists and not self.moved_workers_to_gas:
-                self.moved_workers_to_gas = True
-                extractor = self.units(EXTRACTOR).first
-                for drone in self.workers.random_group_of(3):
-                    await self.do(drone.gather(extractor))
-
-            if self.minerals > 500 and self.workers.exists:
-                for d in range(4, 15):
-                    pos = hatchery.position.to2.towards(self.game_info.map_center, d)
-                    if await self.can_place(HATCHERY, pos):
-                        self.spawning_pool_started = True
-                        await self.do(self.workers.random.build(HATCHERY, pos))
-                        break
-
-            if self.drone_counter < 3:
-                if self.can_afford(DRONE):
-                    self.drone_counter += 1
-                    await self.do(larvae.random.train(DRONE))
-
-            if not self.extractor_started:
-                if self.can_afford(EXTRACTOR) and self.workers.exists:
-                    drone = self.workers.random
-                    target = self.state.vespene_geyser.closest_to(drone.position)
-                    err = await self.do(drone.build(EXTRACTOR, target))
-                    if not err:
-                        self.extractor_started = True
-
-            elif not self.spawning_pool_started:
-                if self.can_afford(SPAWNINGPOOL) and self.workers.exists:
-                    for d in range(4, 15):
-                        pos = hatchery.position.to2.towards(self.game_info.map_center, d)
-                        if await self.can_place(SPAWNINGPOOL, pos):
-                            drone = self.workers.closest_to(pos)
-                            err = await self.do(drone.build(SPAWNINGPOOL, pos))
-                            if not err:
-                                self.spawning_pool_started = True
-                                break
-
-            elif not self.queeen_started and self.units(SPAWNINGPOOL).ready.exists:
-                if self.can_afford(QUEEN):
-                    r = await self.do(hatchery.train(QUEEN))
-                    if not r:
-                        self.queeen_started = True
+        # Decide if we should make pylon or cannons, then build them at random location near enemy spawn
+        elif self.can_afford(UnitTypeId.PYLON) and self.can_afford(UnitTypeId.PHOTONCANNON):
+            # Ensure "fair" decision
+            for _ in range(20):
+                pos = self.enemy_start_locations[0].random_on_distance(random.randrange(5, 12))
+                building = UnitTypeId.PHOTONCANNON if self.state.psionic_matrix.covers(pos) else UnitTypeId.PYLON
+                await self.build(building, near=pos)
 
 
 def main():
-    sc2.run_game(sc2.maps.get("KingsCoveLE"), [
-        Bot(Race.Zerg, AIRBot()),
-        Computer(Race.Random, Difficulty.Medium)
-    ], realtime=False, save_replay_as="AirBotTest.SC2Replay")
+    sc2.run_game(
+        sc2.maps.get("TritonLE"),
+        [Bot(Race.Protoss, CannonRushBot(), name="CheeseCannon"), Computer(Race.Protoss, Difficulty.Medium)],
+        realtime=False,
+    )
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
