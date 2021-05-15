@@ -16,7 +16,7 @@ from sc2.position import Point2
 from sc2.player import Bot, Computer
 
 
-class CannonRushBot(sc2.BotAI):
+class AIRBot(sc2.BotAI):
     async def on_step(self, iteration):
         if iteration == 0:
             await self.chat_send("(probe)(pylon)(cannon)(cannon)(gg)")
@@ -70,7 +70,7 @@ class CannonRushBot(sc2.BotAI):
 def main():
     sc2.run_game(
         sc2.maps.get("TritonLE"),
-        [Bot(Race.Protoss, CannonRushBot(), name="CheeseCannon"), Computer(Race.Protoss, Difficulty.Medium)],
+        [Bot(Race.Protoss, AIRBot(), name="AIRBot"), Computer(Race.Random, Difficulty.Hard)],
         realtime=False,
     )
 
